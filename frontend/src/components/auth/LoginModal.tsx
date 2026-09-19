@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Briefcase, CheckCircle2, Eye, EyeOff, Handshake, IdCard, Loader2, Sparkles, Users, Zap } from 'lucide-react';
 import Modal from '../common/Modal';
 import { useApp } from '../../context/AppContext';
@@ -18,6 +18,12 @@ export default function LoginModal() {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [forgotOpen, setForgotOpen] = useState(false);
+
+  // Always reopen on the sign-in form (with the demo-fill buttons) rather than wherever
+  // the modal was last left — e.g. stuck on "Create Your Profile" from a prior visit.
+  useEffect(() => {
+    if (loginModalOpen) setMode('signin');
+  }, [loginModalOpen]);
 
   function fillDemo(type: 'user' | 'admin') {
     setEmail(type === 'user' ? 'john.doe@alumni.samsung.com' : 'admin@nexus.samsung.com');

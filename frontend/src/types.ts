@@ -222,6 +222,7 @@ export interface ExtendedProfile {
   rsvpedEventIds: string[];
   followedUids: string[];
   connectedUids: string[];
+  bookmarkedArticleIds: string[];
 }
 
 export interface JobApplication {
@@ -243,6 +244,18 @@ export interface AppNotification {
   id: string;
   message: string;
   timestamp: string;
+}
+
+export type ActivityEventType = 'login' | 'signup' | 'logout';
+
+export interface ActivityLogEntry {
+  id: string;
+  uid: string;
+  name: string;
+  email: string;
+  role: Role;
+  event: ActivityEventType;
+  createdAt: Timestamp | null;
 }
 
 export interface FeedComment {
@@ -373,14 +386,54 @@ export const EMPTY_BATTLE_STATS_BASE = {
   badges: [] as string[],
 };
 
+// ---------------------------------------------------------------------------
+// Nexus Wiki
+// ---------------------------------------------------------------------------
+
+export const WIKI_CATEGORIES = [
+  'Interview Experiences', 'Learning Guides', 'Career Stories', 'Project Showcases',
+  'Cloud Computing', 'AI & Machine Learning', 'Programming Tips', 'Resume & Portfolio',
+  'Hackathons & Competitions', 'Entrepreneurship & Startups', 'Research', 'Tools & Resources',
+] as const;
+
+export type WikiStatus = 'draft' | 'pending' | 'published' | 'rejected';
+
+export interface WikiRevision {
+  title: string;
+  body: string;
+  editedAt: string;
+}
+
+export interface WikiComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  text: string;
+  createdDate: string;
+}
+
 export interface WikiArticle {
   id: string;
   authorId: string;
   authorName: string;
+  authorTrack: Track;
   title: string;
   category: string;
+  tags: string[];
   body: string;
-  createdDate: string;
+  excerpt: string;
+  status: WikiStatus;
+  featured: boolean;
+  viewCount: number;
+  upvotes: string[];
+  downvotes: string[];
+  comments: WikiComment[];
+  revisions: WikiRevision[];
+  rejectionReason: string | null;
+  moderatedByName: string | null;
+  createdAt: Timestamp | null;
+  updatedAt: Timestamp | null;
+  publishedAt: Timestamp | null;
 }
 
 export interface MentorshipRequest {
@@ -415,4 +468,5 @@ export const EMPTY_PROFILE: ExtendedProfile = {
   rsvpedEventIds: [],
   followedUids: [],
   connectedUids: [],
+  bookmarkedArticleIds: [],
 };

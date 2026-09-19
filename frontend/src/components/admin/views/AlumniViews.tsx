@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Award, Briefcase, Download, ExternalLink, FileText, Flag, FolderGit2, IdCard, ShieldCheck, Search } from 'lucide-react';
+import {
+  Award, Briefcase, Download, ExternalLink, FileText, Flag, FolderGit2, IdCard, ShieldCheck,
+  Search, LogIn, LogOut, UserPlus, History,
+} from 'lucide-react';
 import { useApp } from '../../../context/AppContext';
 import type { AdminView } from '../AdminPortal';
-import type { DocumentType } from '../../../types';
+import type { ActivityEventType, DocumentType } from '../../../types';
 
 export default function AlumniViews({ view }: { view: AdminView }) {
   if (view === 'alumni.verification') return <VerificationView />;
   if (view === 'alumni.cohorts') return <CohortsView />;
   if (view === 'alumni.submissions') return <SubmissionsView />;
+  if (view === 'alumni.login-activity') return <LoginActivityView />;
   return <AllAlumniView title={view === 'alumni.profiles' ? 'Alumni Profiles' : 'All Alumni'} />;
 }
 
@@ -230,6 +234,102 @@ function VerificationView() {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+const EVENT_META: Record<ActivityEventType, { label: string; icon: typeof LogIn; className: string }> = {
+  login: { label: 'Login', icon: LogIn, className: 'bg-nexus-emerald/15 text-nexus-emerald' },
+  signup: { label: 'Signup', icon: UserPlus, className: 'bg-samsung-blue/15 text-samsung-blue' },
+  logout: { label: 'Logout', icon: LogOut, className: 'bg-nexus-amber/15 text-nexus-amber' },
+};
+
+function LoginActivityView() {
+  const { activityLog } = useApp();
+  const [query, setQuery] = useState('');
+  const [eventFilter, setEventFilter] = useState<'All' | ActivityEventType>('All');
+
+  const filtered = activityLog.filter((entry) => {
+    const matchesQuery = entry.name.toLowerCase().includes(query.toLowerCase()) || entry.email.toLowerCase().includes(query.toLowerCase());
+    const matchesEvent = eventFilter === 'All' || entry.event === eventFilter;
+    return matchesQuery && matchesEvent;
+  });
+
+  return (
+    <div>
+      <h1 className="font-display text-2xl font-bold mb-1">Login Activity</h1>
+      <p className="text-sm text-muted mb-6">
+        A live record of when each alumnus or admin signed up, logged in, and logged out — most recent {activityLog.length} events
+      </p>
+
+      <div className="flex flex-col sm:flex-row gap-3 mb-4">
+        <div className="relative flex-1 max-w-sm">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-faint" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name or email..."
+            className="w-full rounded-lg bg-card border border-hairline pl-9 pr-3 py-2.5 text-sm text-primary placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-samsung-blue"
+          />
+        </div>
+        <select
+          value={eventFilter}
+          onChange={(e) => setEventFilter(e.target.value as 'All' | ActivityEventType)}
+          className="rounded-lg bg-card border border-hairline px-3 py-2.5 text-sm text-primary focus:outline-none focus:ring-2 focus:ring-samsung-blue"
+        >
+          <option value="All">All events</option>
+          <option value="login">Login</option>
+          <option value="signup">Signup</option>
+          <option value="logout">Logout</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 && (
+        <div className="rounded-2xl border border-dashed border-hairline-strong p-10 text-center">
+          <History size={22} className="text-faint mx-auto mb-3" />
+          <p className="text-sm text-muted">
+            {activityLog.length === 0 ? 'No login activity recorded yet — events appear here as alumni sign up, sign in, and sign out.' : 'No events match your filters.'}
+          </p>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <div className="rounded-2xl border border-hairline bg-card overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
+            <thead>
+              <tr className="border-b border-hairline text-xs text-faint uppercase tracking-wide">
+                <th className="text-left font-medium px-5 py-3">User</th>
+                <th className="text-left font-medium px-5 py-3">Role</th>
+                <th className="text-left font-medium px-5 py-3">Event</th>
+                <th className="text-left font-medium px-5 py-3">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice(0, 200).map((entry) => {
+                const meta = EVENT_META[entry.event];
+                const Icon = meta.icon;
+                return (
+                  <tr key={entry.id} className="border-b border-hairline last:border-0 hover:bg-card-alt">
+                    <td className="px-5 py-3">
+                      <p className="font-medium text-primary">{entry.name}</p>
+                      <p className="text-xs text-faint">{entry.email}</p>
+                    </td>
+                    <td className="px-5 py-3 text-muted capitalize">{entry.role}</td>
+                    <td className="px-5 py-3">
+                      <span className={`inline-flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full font-medium ${meta.className}`}>
+                        <Icon size={12} /> {meta.label}
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-muted">
+                      {entry.createdAt ? entry.createdAt.toDate().toLocaleString() : 'just now'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

@@ -6,11 +6,12 @@ import CommunityTab from './tabs/CommunityTab';
 import OpportunitiesTab from './tabs/OpportunitiesTab';
 import EventsTab from './tabs/EventsTab';
 import BattlesTab from './tabs/BattlesTab';
+import WikiTab from './tabs/WikiTab';
 import MessagesTab from './tabs/MessagesTab';
 import ProfileModal from './ProfileModal';
 import ProjectsModal from './ProjectsModal';
 
-const TABS = ['Home', 'Nexus Battles', 'Community', 'Opportunities', 'Events', 'Messages'] as const;
+const TABS = ['Home', 'Nexus Wiki', 'Nexus Battles', 'Community', 'Opportunities', 'Events', 'Messages'] as const;
 type Tab = (typeof TABS)[number];
 
 export default function UserPortal() {
@@ -160,6 +161,7 @@ export default function UserPortal() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {activeTab === 'Home' && <HomeTab onNavigate={setActiveTab} />}
+        {activeTab === 'Nexus Wiki' && <WikiTab />}
         {activeTab === 'Nexus Battles' && <BattlesTab />}
         {activeTab === 'Community' && <CommunityTab />}
         {activeTab === 'Opportunities' && <OpportunitiesTab />}

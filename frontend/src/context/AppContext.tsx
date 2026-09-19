@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, increment,
+  addDoc, arrayRemove, arrayUnion, collection, deleteDoc, doc, getDoc, getDocs, increment, limit,
   onSnapshot, orderBy, query, runTransaction, serverTimestamp, setDoc, Timestamp, updateDoc, where,
 } from 'firebase/firestore';
 import { deleteObject, getDownloadURL, ref, uploadBytes } from 'firebase/storage';
@@ -9,9 +9,9 @@ import {
   updateProfile as updateAuthProfile, type User as FirebaseUser,
 } from 'firebase/auth';
 import type {
-  AlumniDocument, AlumniProject, Announcement, AppNotification, Battle, BattleChallenge,
-  BattleMode, BattleQueueEntry, BattleStats, Conversation, CurrentUser, DifficultyLevel,
-  DocumentType, ExtendedProfile, FeedPost, JobApplication, NexusEvent,
+  ActivityEventType, ActivityLogEntry, AlumniDocument, AlumniProject, Announcement, AppNotification,
+  Battle, BattleChallenge, BattleMode, BattleQueueEntry, BattleStats, Conversation, CurrentUser,
+  DifficultyLevel, DocumentType, ExtendedProfile, FeedPost, JobApplication, NexusEvent,
   Opportunity, ProfileListKey, ProfileListMap, Role, Theme, VerificationApplicant,
   WikiArticle,
 } from '../types';
@@ -87,6 +87,7 @@ interface AppContextValue {
 
   allDocuments: AlumniDocument[];
   allProjects: AlumniProject[];
+  activityLog: ActivityLogEntry[];
 
   feedPosts: FeedPost[];
   toggleLikePost: (postId: string) => Promise<void>;
@@ -114,6 +115,21 @@ interface AppContextValue {
   followAlumnus: (uid: string) => Promise<void>;
   requestMentorship: (toUid: string, toName: string, message: string) => Promise<void>;
   fetchWikiArticlesByAuthor: (uid: string) => Promise<WikiArticle[]>;
+
+  wikiArticles: WikiArticle[];
+  myWikiArticles: WikiArticle[];
+  pendingWikiArticles: WikiArticle[];
+  createWikiArticle: (details: { title: string; category: string; tags: string[]; body: string }) => Promise<string>;
+  updateWikiArticle: (id: string, details: { title: string; category: string; tags: string[]; body: string }) => Promise<void>;
+  submitWikiForReview: (id: string) => Promise<void>;
+  deleteWikiArticle: (id: string) => Promise<void>;
+  approveWikiArticle: (id: string) => Promise<void>;
+  rejectWikiArticle: (id: string, reason: string) => Promise<void>;
+  toggleFeaturedArticle: (id: string, featured: boolean) => Promise<void>;
+  voteOnArticle: (article: WikiArticle, direction: 'up' | 'down') => Promise<void>;
+  toggleBookmarkArticle: (articleId: string) => Promise<void>;
+  addWikiComment: (articleId: string, text: string) => Promise<void>;
+  recordArticleView: (articleId: string) => void;
 
   toast: string | null;
   showToast: (msg: string) => void;
@@ -163,6 +179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [allDocuments, setAllDocuments] = useState<AlumniDocument[]>([]);
   const [allProjects, setAllProjects] = useState<AlumniProject[]>([]);
+  const [activityLog, setActivityLog] = useState<ActivityLogEntry[]>([]);
   const [feedPosts, setFeedPosts] = useState<FeedPost[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [categories, setCategories] = useState<string[]>([...DEFAULT_QUIZ_CATEGORIES]);
@@ -170,6 +187,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [myBattles, setMyBattles] = useState<Battle[]>([]);
   const [queueEntry, setQueueEntry] = useState<BattleQueueEntry | null>(null);
   const [incomingChallenges, setIncomingChallenges] = useState<BattleChallenge[]>([]);
+  const [wikiArticles, setWikiArticles] = useState<WikiArticle[]>([]);
+  const [myWikiArticles, setMyWikiArticles] = useState<WikiArticle[]>([]);
+  const [pendingWikiArticles, setPendingWikiArticles] = useState<WikiArticle[]>([]);
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
@@ -200,8 +220,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const snap = await getDoc(doc(db, 'users', user.uid));
     const data = snap.exists() ? (snap.data() as Partial<CurrentUser>) : {};
     const resolvedRole: Role = data.role ?? 'user';
-    setRole(resolvedRole);
-    setCurrentUser({
+    const record: CurrentUser = {
       uid: user.uid,
       name: data.name ?? user.displayName ?? user.email ?? 'Alumni Member',
       email: user.email ?? data.email ?? '',
@@ -213,7 +232,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
       connectionsCount: data.connectionsCount ?? 0,
       followersCount: data.followersCount ?? 0,
       university: data.university ?? DEFAULT_UNIVERSITY,
-    });
+    };
+    setRole(resolvedRole);
+    setCurrentUser(record);
+    return record;
+  }
+
+  /** Fire-and-forget: records a login/signup/logout event to the admin-visible activity log. */
+  async function logActivity(user: { uid: string; name: string; email: string; role: Role }, event: ActivityEventType) {
+    try {
+      await addDoc(collection(db, 'activityLog'), {
+        uid: user.uid, name: user.name, email: user.email, role: user.role,
+        event, createdAt: serverTimestamp(),
+      });
+    } catch (err) {
+      console.error('activity log failed to sync to database', err);
+    }
   }
 
   // Shared, live app data — visible to any signed-in account (alumni or admin) so that
@@ -233,6 +267,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setMyBattles([]);
       setQueueEntry(null);
       setIncomingChallenges([]);
+      setWikiArticles([]);
+      setMyWikiArticles([]);
       return;
     }
     const uid = currentUser.uid;
@@ -353,6 +389,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       (err) => console.error('battle challenges subscription failed', err),
     );
 
+    // --- Nexus Wiki ---
+    const unsubWiki = onSnapshot(
+      query(collection(db, 'wikiArticles'), where('status', '==', 'published')),
+      (snap) => setWikiArticles(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WikiArticle, 'id'> & { createdAt?: Timestamp }) })).sort(byCreatedAtDesc)),
+      (err) => console.error('wiki articles subscription failed', err),
+    );
+
+    const unsubMyWiki = onSnapshot(
+      query(collection(db, 'wikiArticles'), where('authorId', '==', uid)),
+      (snap) => setMyWikiArticles(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WikiArticle, 'id'> & { createdAt?: Timestamp }) })).sort(byCreatedAtDesc)),
+      (err) => console.error('my wiki articles subscription failed', err),
+    );
+
     return () => {
       unsubDocs();
       unsubProjects();
@@ -368,6 +417,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       unsubMyBattles();
       unsubQueue();
       unsubChallenges();
+      unsubWiki();
+      unsubMyWiki();
     };
   }, [currentUser?.uid]);
 
@@ -377,6 +428,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setAllDocuments([]);
       setAllProjects([]);
       setApplications([]);
+      setActivityLog([]);
+      setPendingWikiArticles([]);
       return;
     }
 
@@ -395,11 +448,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       (snap) => setApplications(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<JobApplication, 'id'>) }))),
       (err) => console.error('admin applications subscription failed', err),
     );
+    const unsubActivityLog = onSnapshot(
+      query(collection(db, 'activityLog'), orderBy('createdAt', 'desc'), limit(500)),
+      (snap) => setActivityLog(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ActivityLogEntry, 'id'>) }))),
+      (err) => console.error('admin activity log subscription failed', err),
+    );
+    const unsubPendingWiki = onSnapshot(
+      query(collection(db, 'wikiArticles'), where('status', '==', 'pending')),
+      (snap) => setPendingWikiArticles(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WikiArticle, 'id'> & { createdAt?: Timestamp }) })).sort(byCreatedAtDesc)),
+      (err) => console.error('admin wiki moderation subscription failed', err),
+    );
 
     return () => {
       unsubAllDocs();
       unsubAllProjects();
       unsubAllApplications();
+      unsubActivityLog();
+      unsubPendingWiki();
     };
   }, [role]);
 
@@ -446,7 +511,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           throw err;
         }
       }
-      await loadUserRecord(user);
+      const record = await loadUserRecord(user);
+      logActivity(record, 'login');
       setLoginModalOpen(false);
       showToast(`Signed in as ${user.email}`);
     } catch (err) {
@@ -475,6 +541,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await setDoc(doc(db, 'users', cred.user.uid), record);
       setRole('user');
       setCurrentUser({ uid: cred.user.uid, ...record });
+      logActivity({ uid: cred.user.uid, name: record.name, email: record.email, role: record.role }, 'signup');
       setLoginModalOpen(false);
       showToast('Profile created — welcome to Samsung Nexus!');
     } catch (err) {
@@ -484,6 +551,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    if (currentUser) logActivity(currentUser, 'logout');
     signOut(auth).catch((err) => console.error('sign out failed', err));
     setRole('visitor');
     setCurrentUser(null);
@@ -1243,11 +1311,175 @@ export function AppProvider({ children }: { children: ReactNode }) {
   async function fetchWikiArticlesByAuthor(uid: string): Promise<WikiArticle[]> {
     try {
       const snap = await getDocs(query(collection(db, 'wikiArticles'), where('authorId', '==', uid)));
-      return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<WikiArticle, 'id'>) }));
+      return snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<WikiArticle, 'id'>) }))
+        .filter((a) => a.status === 'published');
     } catch (err) {
       console.error('failed to fetch wiki articles', err);
       return [];
     }
+  }
+
+  /** Strips markdown syntax down to a short, honest preview — not an AI-generated summary. */
+  function deriveExcerpt(markdown: string): string {
+    const plain = markdown
+      .replace(/```[\s\S]*?```/g, ' ')
+      .replace(/!\[.*?\]\(.*?\)/g, ' ')
+      .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+      .replace(/[#*_>`~-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return plain.length > 180 ? `${plain.slice(0, 180).trim()}…` : plain;
+  }
+
+  async function createWikiArticle(details: { title: string; category: string; tags: string[]; body: string }): Promise<string> {
+    if (!currentUser?.uid) throw new Error('not signed in');
+    const title = details.title.trim();
+    const now = new Date().toISOString();
+    const articleRef = doc(collection(db, 'wikiArticles'));
+    await setDoc(articleRef, {
+      authorId: currentUser.uid, authorName: currentUser.name, authorTrack: currentUser.track,
+      title, category: details.category, tags: details.tags, body: details.body,
+      excerpt: deriveExcerpt(details.body),
+      status: 'draft', featured: false, viewCount: 0,
+      upvotes: [], downvotes: [], comments: [],
+      revisions: [{ title, body: details.body, editedAt: now }],
+      rejectionReason: null, moderatedByName: null,
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp(), publishedAt: null,
+    });
+    showToast('Draft saved');
+    return articleRef.id;
+  }
+
+  async function updateWikiArticle(id: string, details: { title: string; category: string; tags: string[]; body: string }) {
+    const existing = myWikiArticles.find((a) => a.id === id);
+    const title = details.title.trim();
+    const now = new Date().toISOString();
+    const nextRevisions = [...(existing?.revisions ?? []), { title, body: details.body, editedAt: now }].slice(-20);
+    try {
+      await updateDoc(doc(db, 'wikiArticles', id), {
+        title, category: details.category, tags: details.tags, body: details.body,
+        excerpt: deriveExcerpt(details.body),
+        revisions: nextRevisions,
+        updatedAt: serverTimestamp(),
+      });
+      showToast('Article saved');
+    } catch (err) {
+      console.error('failed to save wiki article', err);
+      showToast('Could not save — please try again');
+      throw err;
+    }
+  }
+
+  async function submitWikiForReview(id: string) {
+    try {
+      await updateDoc(doc(db, 'wikiArticles', id), {
+        status: 'pending', rejectionReason: null, updatedAt: serverTimestamp(),
+      });
+      showToast('Submitted for moderator review');
+    } catch (err) {
+      console.error('failed to submit wiki article', err);
+      showToast('Could not submit — please try again');
+    }
+  }
+
+  async function deleteWikiArticle(id: string) {
+    try {
+      await deleteDoc(doc(db, 'wikiArticles', id));
+      showToast('Article deleted');
+    } catch (err) {
+      console.error('failed to delete wiki article', err);
+      showToast('Could not delete — please try again');
+    }
+  }
+
+  async function approveWikiArticle(id: string) {
+    if (!currentUser) return;
+    try {
+      await updateDoc(doc(db, 'wikiArticles', id), {
+        status: 'published', publishedAt: serverTimestamp(), moderatedByName: currentUser.name, updatedAt: serverTimestamp(),
+      });
+      showToast('Article published');
+    } catch (err) {
+      console.error('failed to approve wiki article', err);
+      showToast('Could not publish — please try again');
+    }
+  }
+
+  async function rejectWikiArticle(id: string, reason: string) {
+    if (!currentUser) return;
+    try {
+      await updateDoc(doc(db, 'wikiArticles', id), {
+        status: 'rejected', rejectionReason: reason || 'Does not meet Nexus Wiki guidelines yet.',
+        moderatedByName: currentUser.name, updatedAt: serverTimestamp(),
+      });
+      showToast('Article sent back to the author');
+    } catch (err) {
+      console.error('failed to reject wiki article', err);
+      showToast('Could not reject — please try again');
+    }
+  }
+
+  async function toggleFeaturedArticle(id: string, featured: boolean) {
+    try {
+      await updateDoc(doc(db, 'wikiArticles', id), { featured });
+    } catch (err) {
+      console.error('failed to toggle featured wiki article', err);
+    }
+  }
+
+  async function voteOnArticle(article: WikiArticle, direction: 'up' | 'down') {
+    if (!currentUser?.uid) return;
+    const uid = currentUser.uid;
+    const upvoted = article.upvotes.includes(uid);
+    const downvoted = article.downvotes.includes(uid);
+    const update: Record<string, unknown> = {};
+    if (direction === 'up') {
+      update.upvotes = upvoted ? arrayRemove(uid) : arrayUnion(uid);
+      if (downvoted) update.downvotes = arrayRemove(uid);
+    } else {
+      update.downvotes = downvoted ? arrayRemove(uid) : arrayUnion(uid);
+      if (upvoted) update.upvotes = arrayRemove(uid);
+    }
+    try {
+      await updateDoc(doc(db, 'wikiArticles', article.id), update);
+    } catch (err) {
+      console.error('failed to vote on wiki article', err);
+    }
+  }
+
+  async function toggleBookmarkArticle(articleId: string) {
+    const saved = profile.bookmarkedArticleIds.includes(articleId);
+    const nextIds = saved ? profile.bookmarkedArticleIds.filter((x) => x !== articleId) : [...profile.bookmarkedArticleIds, articleId];
+    setProfile((prev) => ({ ...prev, bookmarkedArticleIds: nextIds }));
+    if (!currentUser?.uid) return;
+    try {
+      await setDoc(doc(db, 'profiles', currentUser.uid), { bookmarkedArticleIds: nextIds }, { merge: true });
+    } catch (err) {
+      console.error('bookmark failed to sync to database', err);
+    }
+  }
+
+  async function addWikiComment(articleId: string, text: string) {
+    if (!currentUser?.uid || !text.trim()) return;
+    const comment = {
+      id: `comment-${Date.now()}`,
+      authorId: currentUser.uid,
+      authorName: currentUser.name,
+      text: text.trim(),
+      createdDate: new Date().toISOString().slice(0, 10),
+    };
+    try {
+      await updateDoc(doc(db, 'wikiArticles', articleId), { comments: arrayUnion(comment) });
+    } catch (err) {
+      console.error('wiki comment failed to sync to database', err);
+    }
+  }
+
+  function recordArticleView(articleId: string) {
+    updateDoc(doc(db, 'wikiArticles', articleId), { viewCount: increment(1) }).catch((err) => {
+      console.error('failed to record article view', err);
+    });
   }
 
   const value = useMemo<AppContextValue>(() => ({
@@ -1266,15 +1498,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
     myDocuments, documentsLoading, addDocument, removeDocument,
     myProjects, addProject, removeProject,
     profile, profileLoading, updateProfileFields, uploadProfileImage, addProfileEntry, removeProfileEntry, toggleSkillPin,
-    allDocuments, allProjects,
+    allDocuments, allProjects, activityLog,
     feedPosts, toggleLikePost, addComment, canInteractWithPost,
     notifications, addNotification,
     categories, addCategory, battleStats, myBattles, activeBattle, queueEntry, incomingChallenges,
     startPractice, joinQueue, leaveQueue, sendChallenge, respondToChallenge, submitBattleAnswer, exitBattle,
     followAlumnus, requestMentorship, fetchWikiArticlesByAuthor,
+    wikiArticles, myWikiArticles, pendingWikiArticles,
+    createWikiArticle, updateWikiArticle, submitWikiForReview, deleteWikiArticle,
+    approveWikiArticle, rejectWikiArticle, toggleFeaturedArticle, voteOnArticle,
+    toggleBookmarkArticle, addWikiComment, recordArticleView,
     toast, showToast,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [role, currentUser, authChecked, theme, loginModalOpen, legalModalOpen, settingsModalOpen, allUsers, opportunities, applications, myApplications, events, conversations, verificationQueue, announcements, myDocuments, documentsLoading, myProjects, profile, profileLoading, allDocuments, allProjects, feedPosts, notifications, categories, battleStats, myBattles, activeBattle, queueEntry, incomingChallenges, toast]);
+  }), [role, currentUser, authChecked, theme, loginModalOpen, legalModalOpen, settingsModalOpen, allUsers, opportunities, applications, myApplications, events, conversations, verificationQueue, announcements, myDocuments, documentsLoading, myProjects, profile, profileLoading, allDocuments, allProjects, activityLog, feedPosts, notifications, categories, battleStats, myBattles, activeBattle, queueEntry, incomingChallenges, wikiArticles, myWikiArticles, pendingWikiArticles, toast]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }

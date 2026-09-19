@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  BarChart3, Bell, Briefcase, Calendar, ChevronDown, ChevronRight, FileText, Home,
+  BarChart3, Bell, BookOpen, Briefcase, Calendar, ChevronDown, ChevronRight, FileText, Home,
   LayoutDashboard, LogOut, Megaphone, Settings as SettingsIcon, Shield, Swords, Users,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -12,15 +12,17 @@ import EventsAdmin from './views/EventsAdmin';
 import ContentAdmin from './views/ContentAdmin';
 import ReportsAdmin from './views/ReportsAdmin';
 import BattlesAdmin from './views/BattlesAdmin';
+import WikiAdmin from './views/WikiAdmin';
 
 export type AdminView =
   | 'dashboard'
-  | 'alumni.all' | 'alumni.cohorts' | 'alumni.profiles' | 'alumni.verification' | 'alumni.submissions'
+  | 'alumni.all' | 'alumni.cohorts' | 'alumni.profiles' | 'alumni.verification' | 'alumni.submissions' | 'alumni.login-activity'
   | 'engagement.activity' | 'engagement.connections' | 'engagement.analytics'
   | 'opportunities.all' | 'opportunities.add' | 'opportunities.applications'
   | 'events.all' | 'events.create' | 'events.attendance'
   | 'content.announcements' | 'content.resources'
   | 'battles.categories'
+  | 'wiki.moderation' | 'wiki.all'
   | 'reports.outcomes' | 'reports.engagement' | 'reports.export';
 
 interface Group {
@@ -37,6 +39,7 @@ const GROUPS: Group[] = [
     { key: 'alumni.profiles', label: 'Profiles' },
     { key: 'alumni.verification', label: 'Verification' },
     { key: 'alumni.submissions', label: 'Submissions' },
+    { key: 'alumni.login-activity', label: 'Login Activity' },
   ] },
   { key: 'engagement', label: 'Engagement', icon: BarChart3, children: [
     { key: 'engagement.activity', label: 'Activity' },
@@ -60,6 +63,10 @@ const GROUPS: Group[] = [
   { key: 'battles', label: 'Nexus Battles', icon: Swords, children: [
     { key: 'battles.categories', label: 'Categories' },
   ] },
+  { key: 'wiki', label: 'Nexus Wiki', icon: BookOpen, children: [
+    { key: 'wiki.moderation', label: 'Moderation Queue' },
+    { key: 'wiki.all', label: 'All Articles' },
+  ] },
   { key: 'reports', label: 'Reports', icon: FileText, children: [
     { key: 'reports.outcomes', label: 'Alumni Outcomes' },
     { key: 'reports.engagement', label: 'Engagement Reports' },
@@ -68,7 +75,7 @@ const GROUPS: Group[] = [
 ];
 
 export default function AdminPortal() {
-  const { currentUser, logout, setSettingsModalOpen, verificationQueue, allDocuments, allProjects } = useApp();
+  const { currentUser, logout, setSettingsModalOpen, verificationQueue, allDocuments, allProjects, pendingWikiArticles } = useApp();
   const [view, setView] = useState<AdminView>('dashboard');
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set(['alumni']));
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -84,6 +91,7 @@ export default function AdminPortal() {
 
   const pendingCount = verificationQueue.filter((v) => v.status === 'Pending').length;
   const submissionsCount = allDocuments.length + allProjects.length;
+  const pendingWikiCount = pendingWikiArticles.length;
 
   const sidebar = (
     <div className="flex flex-col h-full bg-card border-r border-hairline w-72 shrink-0">
@@ -121,6 +129,9 @@ export default function AdminPortal() {
                   {g.key === 'alumni' && pendingCount > 0 && (
                     <span className="text-[10px] bg-nexus-amber text-black rounded-full w-4 h-4 flex items-center justify-center font-semibold">{pendingCount}</span>
                   )}
+                  {g.key === 'wiki' && pendingWikiCount > 0 && (
+                    <span className="text-[10px] bg-nexus-amber text-black rounded-full w-4 h-4 flex items-center justify-center font-semibold">{pendingWikiCount}</span>
+                  )}
                   {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                 </span>
               </button>
@@ -143,6 +154,9 @@ export default function AdminPortal() {
                       )}
                       {c.key === 'alumni.submissions' && submissionsCount > 0 && (
                         <span className="text-[10px] bg-cyan-glow text-black rounded-full px-1.5 font-semibold">{submissionsCount}</span>
+                      )}
+                      {c.key === 'wiki.moderation' && pendingWikiCount > 0 && (
+                        <span className="text-[10px] bg-nexus-amber text-black rounded-full px-1.5 font-semibold">{pendingWikiCount}</span>
                       )}
                     </button>
                   ))}
@@ -218,6 +232,7 @@ export default function AdminPortal() {
           {view.startsWith('events.') && <EventsAdmin view={view} />}
           {view.startsWith('content.') && <ContentAdmin view={view} />}
           {view.startsWith('battles.') && <BattlesAdmin />}
+          {view.startsWith('wiki.') && <WikiAdmin view={view} />}
           {view.startsWith('reports.') && <ReportsAdmin view={view} />}
         </main>
       </div>
